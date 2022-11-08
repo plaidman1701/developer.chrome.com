@@ -27,34 +27,44 @@ const EVENT_PLACEHOLDER =
  * @returns {EventsCollectionItem[]}
  */
 const getEvents = ({collections, filter, sort, locale = 'en'}) => {
-  return collections
-    .getFilteredByGlob(`./site/${locale}/meet-the-team/events/**/*.md`)
-    .filter(filter)
-    .map(event => {
-      const sessions = event.data.sessions.map(session =>
-        processSession(session, locale)
-      );
+  let payload = collections.getFilteredByGlob(
+    `./site/${locale}/meet-the-team/events/**/*.md`
+  );
 
-      const image = Img({
-        src: event.data.image ?? EVENT_PLACEHOLDER,
-        width: 400,
-        height: 400,
-        alt: event.data.title,
-      });
+  if (filter) {
+    payload = payload.filter(filter);
+  }
 
-      return {
-        id: event.data.id,
-        title: event.data.title,
-        externalUrl: event.data.externalUrl,
-        summary: event.data.summary,
-        location: event.data.location,
-        date: event.data.date,
-        isPastEvent: isPastEvent(event),
-        sessions,
-        image,
-      };
-    })
-    .sort(sort);
+  payload = payload.map(event => {
+    const sessions = event.data.sessions.map(session =>
+      processSession(session, locale)
+    );
+
+    const image = Img({
+      src: event.data.image ?? EVENT_PLACEHOLDER,
+      width: 400,
+      height: 400,
+      alt: event.data.title,
+    });
+
+    return {
+      id: event.data.id,
+      title: event.data.title,
+      externalUrl: event.data.externalUrl,
+      summary: event.data.summary,
+      location: event.data.location,
+      date: event.data.date,
+      isPastEvent: isPastEvent(event),
+      sessions,
+      image,
+    };
+  });
+
+  if (sort) {
+    return payload.sort(sort);
+  }
+
+  return payload;
 };
 
 /**
@@ -82,9 +92,27 @@ const currentEvents = collections => {
 };
 
 /**
- * @param {String} authorHandle
- * @param {String} locale
- * @returns {{image: string, twitter: string|undefined, linkedin: string|undefined, title: string}}
+ * @param {EleventyCollectionObject} collections
+ * @returns {{locations:string[], speakers:{}[], topics:string[]}}
+ */
+const eventTags = collections => {
+  const events = getEvents({
+    collections,
+    filter: null,
+    sort: null,
+  });
+
+  return {
+    locations: uniqueLocations(events),
+    speakers: uniqueSpeakers(events),
+    topics: uniqueTopics(events),
+  };
+};
+
+/**
+ * @param {string} authorHandle
+ * @param {string} locale
+ * @returns {EventPersonCollectionItem}
  */
 const getAuthorData = (authorHandle, locale) => {
   if (typeof authorsData[authorHandle] === 'undefined') {
@@ -98,49 +126,103 @@ const getAuthorData = (authorHandle, locale) => {
     title: i18n(`i18n.authors.${authorHandle}.title`, locale),
     twitter: authorData.twitter,
     linkedin: authorData.linkedin,
+    handle: authorHandle,
   };
 };
 
 /**
  * @param session
  * @param {String} locale
- * @returns {{title}|*}
+ * @returns {EventSessionCollectionItem}
  */
 const processSession = (session, locale) => {
+  const payload = {
+    title: session.title,
+    description: session.description,
+    type: session.type,
+    topics: session.topics,
+    slidesUrl: session.slidesUrl,
+    videoUrl: session.videoUrl,
+  };
+
   if (session.type === 'speaker') {
-    session.speaker = getAuthorData(session.speaker, locale);
-    session.image = Img({
-      src: session.speaker.image,
+    payload.speaker = getAuthorData(session.speaker, locale);
+    payload.image = Img({
+      src: payload.speaker.image,
       width: 40,
       height: 40,
-      alt: session.speaker.title ?? session.title,
+      alt: payload.speaker.title ?? payload.title,
       class: 'flex-shrink-none height-600 width-600 rounded-full gap-right-300',
     });
 
-    return session;
+    return payload;
   }
 
-  session.participants = session.participants.map(p => {
+  payload.participants = session.participants.map(p => {
     return getAuthorData(p, locale);
   });
 
-  session.title =
-    session.participants.length === 1
-      ? session.participants[0].title
+  payload.title =
+    payload.participants.length === 1
+      ? payload.participants[0].title
       : i18n('i18n.events.multiple_participants');
 
-  session.image = Img({
+  payload.image = Img({
     src:
-      session.participants.length === 1
-        ? session.participants[0].image
+      payload.participants.length === 1
+        ? payload.participants[0].image
         : chromeImg,
     width: 40,
     height: 40,
-    alt: session.title,
+    alt: payload.title,
     class: 'flex-shrink-none height-600 width-600 rounded-full gap-right-300',
   });
 
-  return session;
+  return payload;
 };
 
-module.exports = {currentEvents, pastEvents};
+/**
+ * @param {EventsCollectionItem[]} events
+ * @returns {{}[]}
+ */
+const uniqueSpeakers = events => {
+  const rawSpeakers = events
+    .map(e =>
+      e.sessions.flatMap(s => {
+        if (s.speaker) {
+          return {handle: s.speaker.handle, title: s.speaker.title};
+        }
+
+        return s.participants.map(p => ({handle: p.handle, title: p.title}));
+      })
+    )
+    .flat();
+
+  return rawSpeakers
+    .filter(
+      (s, i) => rawSpeakers.findIndex(first => s.handle === first.handle) === i
+    )
+    .sort((a, b) => a.title.localeCompare(b.title));
+};
+
+/**
+ * @param {EventsCollectionItem[]} events
+ * @returns {string[]}
+ */
+const uniqueTopics = events => {
+  const topics = events.map(e => e.sessions.flatMap(s => s.topics)).flat();
+
+  return [...new Set(topics)].sort((a, b) => a.localeCompare(b));
+};
+
+/**
+ * @param {EventsCollectionItem[]} events
+ * @returns {string[]}
+ */
+const uniqueLocations = events => {
+  const locations = events.map(e => e.location);
+
+  return [...new Set(locations)].sort((a, b) => a.localeCompare(b));
+};
+
+module.exports = {currentEvents, pastEvents, eventTags};
